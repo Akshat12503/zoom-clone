@@ -1,70 +1,40 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from datetime import datetime
-import random
-import string
-import httpx
+import uuid
 import os
-from dotenv import load_dotenv
 
 from ..database import get_db
 from ..models import Meeting, User
 from ..schemas import MeetingCreate, MeetingOut
 
-load_dotenv()
-
 router = APIRouter()
 
-DAILY_API_KEY = os.getenv("DAILY_API_KEY")
-DAILY_API_URL = os.getenv("DAILY_API_URL")
 
-def generate_meeting_id():
-    parts = []
-    for length in [3, 4, 3]:
-        parts.append(''.join(random.choices(string.ascii_lowercase, k=length)))
-    return '-'.join(parts)
-
-async def create_daily_room(room_name: str):
-    async with httpx.AsyncClient() as client:
-        response = await client.post(
-            f"{DAILY_API_URL}/rooms",
-            headers={"Authorization": f"Bearer {DAILY_API_KEY}"},
-            json={
-                "name": room_name,
-                "properties": {
-                    "enable_transcription": True,
-                    "enable_chat": True,
-                }
-            }
-        )
-        return response.json()
+def generate_meeting_id() -> str:
+    uid = uuid.uuid4().hex
+    return f"{uid[:3]}-{uid[3:7]}-{uid[7:11]}"
 
 
-# GET all meetings
-@router.get("/", response_model=list[MeetingOut])
-def get_meetings(db: Session = Depends(get_db)):
-    return db.query(Meeting).order_by(Meeting.created_at.desc()).all()
-
-
-# GET upcoming meetings
+# GET /api/meetings/upcoming
 @router.get("/upcoming", response_model=list[MeetingOut])
 def get_upcoming(db: Session = Depends(get_db)):
     now = datetime.utcnow()
     return db.query(Meeting).filter(
-        Meeting.status == "waiting",
-        Meeting.start_time > now
-    ).order_by(Meeting.start_time.asc()).all()
+        Meeting.start_time >= now,
+        Meeting.status == "waiting"
+    ).order_by(Meeting.start_time).all()
 
 
-# GET recent/ended meetings
+# GET /api/meetings/recent
 @router.get("/recent", response_model=list[MeetingOut])
 def get_recent(db: Session = Depends(get_db)):
     return db.query(Meeting).filter(
-        Meeting.status == "ended"
+        Meeting.status.in_(["ended", "active"])
     ).order_by(Meeting.created_at.desc()).limit(10).all()
 
 
-# GET single meeting by meeting_id
+# GET /api/meetings/{meeting_id}
 @router.get("/{meeting_id}", response_model=MeetingOut)
 def get_meeting(meeting_id: str, db: Session = Depends(get_db)):
     meeting = db.query(Meeting).filter(
@@ -75,22 +45,26 @@ def get_meeting(meeting_id: str, db: Session = Depends(get_db)):
     return meeting
 
 
-# POST create new meeting (instant or scheduled)
-@router.post("/", response_model=MeetingOut)
-def create_meeting(data: MeetingCreate, db: Session = Depends(get_db)):
+# POST /api/meetings/instant
+@router.post("/instant", response_model=MeetingOut)
+def create_instant_meeting(db: Session = Depends(get_db)):
     user = db.query(User).first()
-    mid = generate_meeting_id()
+    if not user:
+        raise HTTPException(status_code=404, detail="No user found. Did you seed the database?")
+
+    meeting_id = generate_meeting_id()
+    invite_link = f"http://localhost:3000/join/{meeting_id}"
 
     meeting = Meeting(
-        meeting_id=mid,
-        title=data.title,
-        description=data.description,
+        meeting_id=meeting_id,
+        title="Instant Meeting",
+        description="",
         host_id=user.id,
-        type=data.type,
+        type="instant",
         status="waiting",
-        start_time=data.start_time or datetime.utcnow(),
-        duration=data.duration,
-        invite_link=f"http://localhost:3000/join/{mid}"
+        start_time=datetime.utcnow(),
+        duration=60,
+        invite_link=invite_link,
     )
     db.add(meeting)
     db.commit()
@@ -98,34 +72,56 @@ def create_meeting(data: MeetingCreate, db: Session = Depends(get_db)):
     return meeting
 
 
-# POST start a meeting — creates Daily.co room
-@router.post("/{meeting_id}/start", response_model=MeetingOut)
-async def start_meeting(meeting_id: str, db: Session = Depends(get_db)):
+# POST /api/meetings/schedule
+@router.post("/schedule", response_model=MeetingOut)
+def schedule_meeting(data: MeetingCreate, db: Session = Depends(get_db)):
+    user = db.query(User).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="No user found. Did you seed the database?")
+
+    meeting_id = generate_meeting_id()
+    invite_link = f"http://localhost:3000/join/{meeting_id}"
+
+    meeting = Meeting(
+        meeting_id=meeting_id,
+        title=data.title,
+        description=data.description or "",
+        host_id=user.id,
+        type="scheduled",
+        status="waiting",
+        start_time=data.start_time,
+        duration=data.duration,
+        invite_link=invite_link,
+    )
+    db.add(meeting)
+    db.commit()
+    db.refresh(meeting)
+    return meeting
+
+
+# POST /api/meetings/{meeting_id}/start
+@router.post("/{meeting_id}/start")
+def start_meeting(meeting_id: str, db: Session = Depends(get_db)):
     meeting = db.query(Meeting).filter(
         Meeting.meeting_id == meeting_id
     ).first()
     if not meeting:
         raise HTTPException(status_code=404, detail="Meeting not found")
 
-    if meeting.daily_room_name:
-        # Room already created, just reactivate
-        meeting.status = "active"
-        db.commit()
-        db.refresh(meeting)
-        return meeting
-
-    # Create Daily.co room
-    room_name = f"zoom-clone-{meeting_id}"
-    daily_response = await create_daily_room(room_name)
-
-    meeting.daily_room_name = daily_response.get("name", room_name)
+    # Mark as active — Jitsi room is created on the frontend using the meeting_id
     meeting.status = "active"
+    meeting.daily_room_name = f"zoomclone-{meeting_id.replace('-', '')}"
     db.commit()
     db.refresh(meeting)
-    return meeting
+
+    return {
+        "meeting_id": meeting.meeting_id,
+        "title": meeting.title,
+        "status": meeting.status,
+    }
 
 
-# POST end a meeting
+# POST /api/meetings/{meeting_id}/end
 @router.post("/{meeting_id}/end", response_model=MeetingOut)
 def end_meeting(meeting_id: str, db: Session = Depends(get_db)):
     meeting = db.query(Meeting).filter(

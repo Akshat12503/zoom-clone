@@ -16,23 +16,22 @@ class UserOut(BaseModel):
 # --- Meeting ---
 class MeetingCreate(BaseModel):
     title: str
-    description: Optional[str] = None
-    type: str = "instant"
+    description: Optional[str] = ""
     start_time: Optional[datetime] = None
-    duration: int = 60
+    duration: Optional[int] = 60
 
 class MeetingOut(BaseModel):
     id: int
     meeting_id: str
     title: str
-    description: Optional[str]
+    description: Optional[str] = ""
     type: str
     status: str
-    start_time: Optional[datetime]
-    duration: int
-    invite_link: Optional[str]
-    daily_room_name: Optional[str]
-    created_at: datetime
+    start_time: Optional[datetime] = None
+    duration: Optional[int] = 60
+    daily_room_name: Optional[str] = None
+    invite_link: Optional[str] = None
+    created_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True

@@ -3,9 +3,8 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useRouter, useParams } from "next/navigation";
 import {
-  Mic, MicOff, Video, VideoOff, PhoneOff,
-  Users, MessageSquare, Copy, Check, Loader,
-  MonitorOff, ScreenShare
+  PhoneOff, Users, MessageSquare,
+  Copy, Check, Loader
 } from "lucide-react";
 import axios from "axios";
 
@@ -28,28 +27,19 @@ export default function MeetingRoom() {
   const params = useParams();
   const meetingId = params.meetingId as string;
 
-  // Daily.co iframe ref
-  const iframeRef = useRef<HTMLIFrameElement>(null);
-  const callFrameRef = useRef<any>(null);
+  const recognitionRef = useRef<any>(null);
 
-  // UI state
   const [loading, setLoading] = useState(true);
   const [meetingTitle, setMeetingTitle] = useState("Meeting");
   const [displayName, setDisplayName] = useState("Guest");
-  const [micOn, setMicOn] = useState(true);
-  const [camOn, setCamOn] = useState(true);
-  const [sharing, setSharing] = useState(false);
   const [showParticipants, setShowParticipants] = useState(false);
   const [showTranscript, setShowTranscript] = useState(false);
   const [participants, setParticipants] = useState<Participant[]>([]);
   const [transcript, setTranscript] = useState<TranscriptLine[]>([]);
   const [copied, setCopied] = useState(false);
   const [meetingEnded, setMeetingEnded] = useState(false);
-  const [dailyRoomUrl, setDailyRoomUrl] = useState("");
   const [transcribing, setTranscribing] = useState(false);
-
-  // Speech recognition ref
-  const recognitionRef = useRef<any>(null);
+  const [jitsiRoom, setJitsiRoom] = useState("");
 
   useEffect(() => {
     const name = sessionStorage.getItem("displayName") || "Guest";
@@ -60,12 +50,10 @@ export default function MeetingRoom() {
 
   const initMeeting = async (name: string) => {
     try {
-      // Start the meeting (creates Daily.co room)
       const res = await axios.post(`${API_URL}/api/meetings/${meetingId}/start`);
-      const { title, daily_room_url } = res.data;
-      setMeetingTitle(title || "Meeting");
-      setDailyRoomUrl(daily_room_url);
-      loadDailyFrame(daily_room_url, name);
+      setMeetingTitle(res.data.title || "Meeting");
+      // Use meetingId as the Jitsi room name (sanitized)
+      setJitsiRoom(meetingId.replace(/-/g, ""));
       fetchParticipants();
     } catch (err) {
       console.error("Failed to init meeting", err);
@@ -74,74 +62,17 @@ export default function MeetingRoom() {
     }
   };
 
-  const loadDailyFrame = (roomUrl: string, name: string) => {
-    if (typeof window === "undefined") return;
-
-    // Dynamically load Daily.co script
-    const script = document.createElement("script");
-    script.src = "https://unpkg.com/@daily-co/daily-js";
-    script.onload = () => {
-      const DailyIframe = (window as any).DailyIframe;
-      if (!DailyIframe || !iframeRef.current) return;
-
-      const callFrame = DailyIframe.wrap(iframeRef.current, {
-        showLeaveButton: false,
-        showFullscreenButton: true,
-        iframeStyle: {
-          width: "100%",
-          height: "100%",
-          border: "none",
-          borderRadius: "16px",
-        },
-      });
-
-      callFrameRef.current = callFrame;
-
-      callFrame.join({
-        url: roomUrl,
-        userName: name,
-        startVideoOff: false,
-        startAudioOff: false,
-      });
-
-      callFrame.on("left-meeting", () => handleEndMeeting());
-    };
-    document.head.appendChild(script);
-  };
-
   const fetchParticipants = async () => {
     try {
       const res = await axios.get(`${API_URL}/api/participants/${meetingId}`);
       setParticipants(res.data);
     } catch (err) {
-      console.error("Failed to fetch participants", err);
+      console.error(err);
     }
-  };
-
-  // --- Controls ---
-  const toggleMic = () => {
-    callFrameRef.current?.setLocalAudio(!micOn);
-    setMicOn((prev) => !prev);
-  };
-
-  const toggleCam = () => {
-    callFrameRef.current?.setLocalVideo(!camOn);
-    setCamOn((prev) => !prev);
-  };
-
-  const toggleScreenShare = async () => {
-    if (!callFrameRef.current) return;
-    if (sharing) {
-      await callFrameRef.current.stopScreenShare();
-    } else {
-      await callFrameRef.current.startScreenShare();
-    }
-    setSharing((prev) => !prev);
   };
 
   const handleEndMeeting = async () => {
     stopTranscription();
-    callFrameRef.current?.destroy();
     try {
       await axios.post(`${API_URL}/api/meetings/${meetingId}/end`);
     } catch (_) {}
@@ -150,8 +81,7 @@ export default function MeetingRoom() {
   };
 
   const copyInviteLink = () => {
-    const link = `${window.location.origin}/join/${meetingId}`;
-    navigator.clipboard.writeText(link);
+    navigator.clipboard.writeText(`${window.location.origin}/join/${meetingId}`);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
@@ -162,10 +92,9 @@ export default function MeetingRoom() {
       (window as any).SpeechRecognition ||
       (window as any).webkitSpeechRecognition;
     if (!SpeechRecognition) {
-      alert("Speech recognition is not supported in this browser. Use Chrome.");
+      alert("Speech recognition not supported. Please use Chrome.");
       return;
     }
-
     const recognition = new SpeechRecognition();
     recognition.continuous = true;
     recognition.interimResults = false;
@@ -174,15 +103,12 @@ export default function MeetingRoom() {
     recognition.onresult = async (event: any) => {
       const text = event.results[event.results.length - 1][0].transcript.trim();
       if (!text) return;
-
       const line: TranscriptLine = {
         speaker_name: displayName,
         text,
         timestamp: new Date().toISOString(),
       };
       setTranscript((prev) => [...prev, line]);
-
-      // Save to backend
       try {
         await axios.post(`${API_URL}/api/transcripts/${meetingId}`, {
           speaker_name: displayName,
@@ -196,7 +122,6 @@ export default function MeetingRoom() {
     };
 
     recognition.onend = () => {
-      // Auto-restart if still transcribing
       if (recognitionRef.current) recognition.start();
     };
 
@@ -215,14 +140,9 @@ export default function MeetingRoom() {
   };
 
   const toggleTranscription = () => {
-    if (transcribing) {
-      stopTranscription();
-    } else {
-      startTranscription();
-    }
+    transcribing ? stopTranscription() : startTranscription();
   };
 
-  // Meeting ended screen
   if (meetingEnded) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-900">
@@ -274,9 +194,9 @@ export default function MeetingRoom() {
       {/* Main Content */}
       <div className="flex flex-1 overflow-hidden">
 
-        {/* Video Area */}
+        {/* Jitsi Video Area */}
         <div className="flex-1 relative bg-gray-900 p-3">
-          {loading ? (
+          {loading || !jitsiRoom ? (
             <div className="h-full flex items-center justify-center">
               <div className="text-center text-white">
                 <Loader className="w-8 h-8 animate-spin mx-auto mb-3 text-blue-400" />
@@ -285,7 +205,7 @@ export default function MeetingRoom() {
             </div>
           ) : (
             <iframe
-              ref={iframeRef}
+              src={`https://meet.jit.si/${jitsiRoom}#userInfo.displayName="${encodeURIComponent(displayName)}"&config.prejoinPageEnabled=false&config.startWithAudioMuted=false&config.startWithVideoMuted=false&interfaceConfig.SHOW_JITSI_WATERMARK=false&interfaceConfig.TOOLBAR_BUTTONS=["microphone","camera","desktop","fullscreen","hangup","tileview","settings"]`}
               allow="camera; microphone; fullscreen; display-capture; autoplay"
               className="w-full h-full rounded-2xl"
               style={{ border: "none" }}
@@ -293,7 +213,7 @@ export default function MeetingRoom() {
           )}
         </div>
 
-        {/* Side Panel - Participants */}
+        {/* Participants Panel */}
         {showParticipants && (
           <div className="w-64 bg-gray-800 border-l border-gray-700 flex flex-col">
             <div className="px-4 py-3 border-b border-gray-700">
@@ -318,7 +238,7 @@ export default function MeetingRoom() {
           </div>
         )}
 
-        {/* Side Panel - Transcript */}
+        {/* Transcript Panel */}
         {showTranscript && (
           <div className="w-72 bg-gray-800 border-l border-gray-700 flex flex-col">
             <div className="px-4 py-3 border-b border-gray-700 flex items-center justify-between">
@@ -353,51 +273,16 @@ export default function MeetingRoom() {
       </div>
 
       {/* Bottom Controls */}
-      <div className="flex items-center justify-center gap-3 py-4 bg-gray-800 border-t border-gray-700 flex-shrink-0">
-
-        {/* Mic */}
-        <button
-          onClick={toggleMic}
-          className={`flex flex-col items-center gap-1 p-3 rounded-xl transition ${
-            micOn ? "bg-gray-700 hover:bg-gray-600 text-white" : "bg-red-500/20 text-red-400"
-          }`}
-        >
-          {micOn ? <Mic className="w-5 h-5" /> : <MicOff className="w-5 h-5" />}
-          <span className="text-xs">{micOn ? "Mute" : "Unmute"}</span>
-        </button>
-
-        {/* Camera */}
-        <button
-          onClick={toggleCam}
-          className={`flex flex-col items-center gap-1 p-3 rounded-xl transition ${
-            camOn ? "bg-gray-700 hover:bg-gray-600 text-white" : "bg-red-500/20 text-red-400"
-          }`}
-        >
-          {camOn ? <Video className="w-5 h-5" /> : <VideoOff className="w-5 h-5" />}
-          <span className="text-xs">{camOn ? "Stop Video" : "Start Video"}</span>
-        </button>
-
-        {/* Screen Share */}
-        <button
-          onClick={toggleScreenShare}
-          className={`flex flex-col items-center gap-1 p-3 rounded-xl transition ${
-            sharing ? "bg-blue-600 text-white" : "bg-gray-700 hover:bg-gray-600 text-white"
-          }`}
-        >
-          {sharing ? <MonitorOff className="w-5 h-5" /> : <ScreenShare className="w-5 h-5" />}
-          <span className="text-xs">{sharing ? "Stop Share" : "Share Screen"}</span>
-        </button>
-
-        {/* End Call */}
+      <div className="flex items-center justify-center py-4 bg-gray-800 border-t border-gray-700 flex-shrink-0">
         <button
           onClick={handleEndMeeting}
-          className="flex flex-col items-center gap-1 bg-red-500 hover:bg-red-600 text-white p-3 rounded-xl transition ml-4"
+          className="flex items-center gap-2 bg-red-500 hover:bg-red-600 text-white px-6 py-3 rounded-xl transition font-medium"
         >
           <PhoneOff className="w-5 h-5" />
-          <span className="text-xs">End</span>
+          Leave Meeting
         </button>
-
       </div>
+
     </div>
   );
 }
