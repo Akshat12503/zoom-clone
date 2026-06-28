@@ -4,9 +4,9 @@ A full-stack video conferencing web application that replicates Zoom's design, u
 
 ## Live Demo
 
-- **Frontend:** https://zoom-clone-xyz.vercel.app
-- **Backend API:** https://zoom-clone-backend.onrender.com
-- **API Docs:** https://zoom-clone-backend.onrender.com/docs
+- **Frontend:** https://zoom-clone-r7pppwcfp-akshat12503s-projects.vercel.app/
+- **Backend API:** https://zoom-clone-backend-o7cg.onrender.com
+- **API Docs:** https://zoom-clone-backend-o7cg.onrender.com/docs
 
 > Replace the above URLs with your actual deployed URLs.
 
