@@ -5,16 +5,20 @@ from fastapi.middleware.cors import CORSMiddleware
 from .database import engine, Base
 from .routers import meetings, participants, transcripts
 from . import seed
+from fastapi.middleware.cors import CORSMiddleware
 
 Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="Zoom Clone API")
 
+from fastapi.middleware.cors import CORSMiddleware
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:3000",
-        "https://your-frontend.vercel.app",  # we'll fill this after Vercel deploy
+        "https://zoom-clone-r7pppwcfp-akshat12503s-projects.vercel.app",
+        "https://zoom-clone.vercel.app",
     ],
     allow_credentials=True,
     allow_methods=["*"],
