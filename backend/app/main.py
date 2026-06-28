@@ -17,8 +17,10 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:3000",
+        "https://zoom-clone-chi-sable.vercel.app",
+        "https://zoom-clone-git-main-akshat12503s-projects.vercel.app",
+        "https://zoom-clone-ot5kziyma-akshat12503s-projects.vercel.app",
         "https://zoom-clone-r7pppwcfp-akshat12503s-projects.vercel.app",
-        "https://zoom-clone.vercel.app",
     ],
     allow_credentials=True,
     allow_methods=["*"],
